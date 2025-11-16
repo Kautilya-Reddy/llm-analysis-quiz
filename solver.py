@@ -16,7 +16,12 @@ def call_llm_generic(llm_api, llm_key, system_prompt, user_prompt, context_text,
 
 def render_url_text(url, timeout=30):
     with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--no-sandbox"])
+        browser = p.chromium.launch(
+            headless=True,
+            executable_path=p.chromium.executable_path(), 
+            args=["--no-sandbox"]
+        )
+
         page = browser.new_page()
         page.set_default_navigation_timeout(int(timeout * 1000))
         page.goto(url)
