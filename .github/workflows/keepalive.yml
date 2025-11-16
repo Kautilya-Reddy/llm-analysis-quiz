@@ -1,0 +1,18 @@
+name: Keep Render Alive
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping endpoint
+        run: |
+          URL="${{ secrets.KEEPALIVE_URL }}"
+          if [ -z "$URL" ]; then
+            echo "No KEEPALIVE_URL secret set"
+            exit 1
+          fi
+          curl -sS --max-time 10 "$URL" || true
