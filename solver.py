@@ -4,7 +4,7 @@ from playwright.sync_api import sync_playwright
 def call_llm_generic(llm_api, llm_key, system_prompt, user_prompt, context_text, timeout=30):
     headers = {"Content-Type": "application/json"}
     if llm_key:
-        headers["Authorization"] = f"Bearer {llm_key}"
+        headers["Authorization"] = f"Bearer {llm_key}"    
     body = {
         "system": system_prompt,
         "user": user_prompt + "\n\nCONTEXT:\n" + context_text,
@@ -18,7 +18,7 @@ def render_url_text(url, timeout=30):
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            executable_path=p.chromium.executable_path(), 
+            executable_path=p.chromium.executable_path,   # ✅ FIXED HERE
             args=["--no-sandbox"]
         )
 
