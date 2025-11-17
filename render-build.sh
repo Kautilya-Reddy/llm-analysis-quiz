@@ -2,4 +2,6 @@
 set -o errexit
 
 pip install -r requirements.txt
-playwright install chromium
+
+# Install Playwright Chromium browser
+python -m playwright install chromium
