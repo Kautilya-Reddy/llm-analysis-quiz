@@ -1,61 +1,53 @@
+import time
 import requests
 from bs4 import BeautifulSoup
-import json
-import time
 
-# -------------------------------------------------
-# Simple URL renderer without Playwright
-# -------------------------------------------------
-def render_url_text(url, timeout=10):
-    """
-    Fetch page HTML using requests, and extract visible text using BeautifulSoup.
-    This works on Render without any browser dependencies.
-    """
-    response = requests.get(url, timeout=timeout, headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    })
-    response.raise_for_status()
+def fetch_page_text(url, timeout=20):
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+    return soup.get_text("\n"), r.text
 
-    html = response.text
-    soup = BeautifulSoup(html, "html.parser")
+def call_llm_api(llm_api, prompt, secret):
+    r = requests.post(
+        llm_api,
+        json={"secret": secret, "prompt": prompt},
+        timeout=40
+    )
+    return r.json()
 
-    # Extract readable page text
-    text = soup.get_text(separator="\n", strip=True)
+def solve_quiz_task(
+    email,
+    quiz_url,
+    secret,
+    llm_api=None,
+    timeout_seconds=60
+):
+    start = time.time()
+    
+    page_text, page_html = fetch_page_text(quiz_url, timeout=20)
+    
+    prompt = f"""
+You are solving an IITM LLM Analysis Quiz.
 
-    return text, html
+User email: {email}
 
+Page text:
+{page_text}
 
-# -------------------------------------------------
-# Main quiz solver
-# -------------------------------------------------
-def solve_quiz_task(email, secret, url, timeout_seconds=40):
-    """
-    Main function called from /task in app.py.
-    It fetches the target webpage, extracts text and HTML,
-    and returns a JSON-friendly result dictionary.
-    """
+HTML content:
+{page_html}
 
-    start_time = time.time()
+Give only the final answer.
+"""
 
-    # Fetch text & HTML from the provided URL
-    text, html = render_url_text(url, timeout=min(10, timeout_seconds - 5))
+    if not llm_api:
+        return {"error": "llm_api_missing"}
 
-    elapsed = round(time.time() - start_time, 2)
+    response = call_llm_api(llm_api, prompt, secret)
 
-    # IMPORTANT:
-    # The evaluator expects a dict containing:
-    # - "email"
-    # - "secret"
-    # - "answer" (your extracted text or processed result)
-
-    result = {
+    return {
         "email": email,
-        "secret": secret,
-        "elapsed_time": elapsed,
-        "answer": {
-            "extracted_text": text[:5000],   # limit to avoid huge uploads
-            "html_snippet": html[:5000]
-        }
+        "answer": response,
+        "time_taken": time.time() - start
     }
-
-    return result
