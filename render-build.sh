@@ -4,5 +4,6 @@ set -o errexit
 # Install Python packages
 pip install -r requirements.txt
 
-# Install Chromium in a way that works on Render (no system deps)
-python -m playwright install chromium --browser-channel=chrome
+# Install Chromium browser without system dependency checks
+python -m playwright install chromium
+python -m playwright install-deps chromium || true
