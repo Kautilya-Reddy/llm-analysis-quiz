@@ -1,53 +1,43 @@
-import time
 import requests
 from bs4 import BeautifulSoup
 
-def fetch_page_text(url, timeout=20):
-    r = requests.get(url, timeout=timeout)
-    r.raise_for_status()
-    soup = BeautifulSoup(r.text, "html.parser")
-    return soup.get_text("\n"), r.text
+def render_url_text(url, timeout=30):
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    html = response.text
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text(separator="\n")
+    return text, html
 
-def call_llm_api(llm_api, prompt, secret):
+
+def solve_quiz_task(email, url, llm_api, timeout_seconds=60):
+    """
+    Main solver used by Render & evaluator.
+    """
+
+    page_text, page_html = render_url_text(url)
+
+    prompt = (
+        "You are an AI solver for quiz tasks.\n"
+        "Extract the quiz question and provide the correct answer.\n\n"
+        f"PAGE TEXT:\n{page_text}"
+    )
+
+    # Call LLM
     r = requests.post(
         llm_api,
-        json={"secret": secret, "prompt": prompt},
-        timeout=40
+        json={
+            "model": "gpt-4o-mini",
+            "input": prompt,
+        },
+        timeout=timeout_seconds - 5
     )
-    return r.json()
 
-def solve_quiz_task(
-    email,
-    quiz_url,
-    secret,
-    llm_api=None,
-    timeout_seconds=60
-):
-    start = time.time()
-    
-    page_text, page_html = fetch_page_text(quiz_url, timeout=20)
-    
-    prompt = f"""
-You are solving an IITM LLM Analysis Quiz.
+    r.raise_for_status()
 
-User email: {email}
-
-Page text:
-{page_text}
-
-HTML content:
-{page_html}
-
-Give only the final answer.
-"""
-
-    if not llm_api:
-        return {"error": "llm_api_missing"}
-
-    response = call_llm_api(llm_api, prompt, secret)
+    answer = r.json()
 
     return {
         "email": email,
-        "answer": response,
-        "time_taken": time.time() - start
+        "answer": answer
     }
