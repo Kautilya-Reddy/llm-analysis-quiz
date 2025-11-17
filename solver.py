@@ -18,7 +18,6 @@ def render_url_text(url, timeout=30):
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            executable_path=p.chromium.executable_path,   # ✅ FIXED HERE
             args=["--no-sandbox"]
         )
 
@@ -26,9 +25,12 @@ def render_url_text(url, timeout=30):
         page.set_default_navigation_timeout(int(timeout * 1000))
         page.goto(url)
         time.sleep(1.0)
+
         text = page.evaluate("() => document.documentElement.innerText")
         html = page.content()
+
         browser.close()
+
     return text, html
 
 def extract_json_from_response(resp):
