@@ -1,122 +1,34 @@
-import time
-import json
-import requests
-from playwright.sync_api import sync_playwright
-
-
-def call_llm_generic(llm_api, llm_key, system_prompt, user_prompt, context_text, timeout=30):
-    headers = {"Content-Type": "application/json"}
-    if llm_key:
-        headers["Authorization"] = f"Bearer {llm_key}"
-
-    body = {
-        "system": system_prompt,
-        "user": user_prompt + "\n\nCONTEXT:\n" + context_text,
-        "max_tokens": 1200
-    }
-
-    r = requests.post(llm_api, json=body, headers=headers, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
-
-
 def render_url_text(url, timeout=30):
-    with sync_playwright() as p:
-        chromium_path = p.chromium.executable_path
+    import playwright
+    from playwright.sync_api import sync_playwright
+    import subprocess, os, time
 
+    # Ensure browser is installed at runtime
+    chromium_path = "/opt/render/.cache/ms-playwright/chromium-1194/chrome-linux/chrome"
+    if not os.path.exists(chromium_path):
+        subprocess.run(
+            ["python3", "-m", "playwright", "install", "chromium"],
+            check=True
+        )
+
+    with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            executable_path=chromium_path,
             args=[
                 "--no-sandbox",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
-                "--disable-software-rasterizer",
-                "--disable-setuid-sandbox",
-                "--no-zygote",
-                "--disable-dev-tools"
             ]
         )
 
         page = browser.new_page()
-        page.set_default_navigation_timeout(int(timeout * 1000))
+        page.set_default_navigation_timeout(timeout * 1000)
         page.goto(url)
 
-        time.sleep(1.0)
-
+        time.sleep(1)
         text = page.evaluate("() => document.documentElement.innerText")
         html = page.content()
 
         browser.close()
 
     return text, html
-
-
-def extract_json_from_response(resp):
-    if isinstance(resp, dict) and "text" in resp:
-        candidate = resp["text"]
-    else:
-        candidate = str(resp)
-
-    candidate = candidate.strip()
-
-    try:
-        return json.loads(candidate)
-    except Exception:
-        start = candidate.find("{")
-        end = candidate.rfind("}")
-        if start != -1 and end != -1:
-            try:
-                return json.loads(candidate[start:end + 1])
-            except Exception:
-                pass
-
-    return None
-
-
-def solve_quiz_task(email, secret, url, llm_api, llm_key, timeout_seconds=170):
-    t0 = time.time()
-
-    page_text, page_html = render_url_text(url, timeout=min(30, timeout_seconds - 10))
-
-    system_prompt = "You are precise. Return ONLY JSON with keys answer, submit_url, submit_payload."
-    user_prompt = "Return JSON: {\"answer\":...,\"submit_url\":\"...\",\"submit_payload\":{...}}"
-
-    llm_resp = call_llm_generic(
-        llm_api,
-        llm_key,
-        system_prompt,
-        user_prompt,
-        page_text,
-        timeout=min(60, timeout_seconds - (time.time() - t0))
-    )
-
-    parsed = extract_json_from_response(llm_resp)
-    if not parsed:
-        raise RuntimeError("LLM returned no parseable JSON")
-
-    answer = parsed.get("answer")
-    submit_url = parsed.get("submit_url") or parsed.get("submitUrl")
-    submit_payload = parsed.get("submit_payload") or parsed.get("submitPayload") or {}
-
-    if not submit_url:
-        for tok in page_html.split():
-            if "https://" in tok and "submit" in tok:
-                submit_url = tok.strip('",')
-                break
-
-    if not submit_url:
-        raise RuntimeError("no submit_url found")
-
-    final_payload = {"email": email, "secret": secret, "url": url}
-    final_payload.update(submit_payload)
-    final_payload["answer"] = answer
-
-    r = requests.post(submit_url, json=final_payload, timeout=30)
-    r.raise_for_status()
-
-    return {
-        "status": "submitted",
-        "submit_response": r.json(),
-        "llm_parsed": parsed
-    }
