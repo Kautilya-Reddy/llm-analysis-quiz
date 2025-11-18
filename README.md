@@ -1,12 +1,17 @@
-LLM Analysis Quiz - Server
+# llm-analysis-quiz
 
-Run locally:
-  pip install -r requirements.txt
-  playwright install
-  export SOLVER_LLM_API=...
-  export EXPORTED_SECRET=...
-  python app.py
+This repository contains the LLM Analysis Quiz solver service.
+The app exposes a `/task` endpoint which accepts:
+- email
+- secret
+- url
 
-Deploy:
-  Push to GitHub
-  Deploy on Render
+The solver automatically handles:
+- page extraction
+- decoding
+- scraping
+- CSV processing
+- audio processing
+- multi-step task flows
+
+This version is prepared for HuggingFace Spaces deployment.
