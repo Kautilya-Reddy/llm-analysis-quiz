@@ -1,10 +1,21 @@
-# llm-analysis-quiz
+---
+title: LLM Analysis Quiz Solver
+emoji: 🤖
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_file: app.py
+pinned: false
+---
+
+# LLM Analysis Quiz Solver
 
 This repository contains the LLM Analysis Quiz solver service.
+
 The app exposes a `/task` endpoint which accepts:
-- email
-- secret
-- url
+- `email`
+- `secret`
+- `url`
 
 The solver automatically handles:
 - page extraction
@@ -12,6 +23,6 @@ The solver automatically handles:
 - scraping
 - CSV processing
 - audio processing
-- multi-step task flows
+- multi-step quiz workflows
 
-This version is prepared for HuggingFace Spaces deployment.
+This version is prepared for deployment on **HuggingFace Spaces (Docker)**.
