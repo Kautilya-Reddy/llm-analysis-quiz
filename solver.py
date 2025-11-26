@@ -8,18 +8,28 @@ TIME_LIMIT = 170
 
 
 def extract_decoded_payload(html: str) -> str:
-    match = re.search(r"atob\(`([^`]+)`\)", html)
+    match = re.search(r"atob\(`([^`]+)`\)", html, re.DOTALL)
     if not match:
         return ""
 
     b64 = match.group(1).replace("\n", "")
-    decoded = base64.b64decode(b64).decode("utf-8", errors="ignore")
+    try:
+        decoded = base64.b64decode(b64).decode("utf-8", errors="ignore")
+    except Exception:
+        decoded = ""
     return decoded
 
 
 def find_submit_url_from_payload(payload: str) -> str | None:
-    match = re.search(r"https://[^\s\"']+/submit", payload)
-    return match.group(0) if match else None
+    urls = re.findall(r"https?://[^\s\"']+", payload)
+    if not urls:
+        return None
+
+    for u in urls:
+        if "submit" in u.lower() or "/api" in u.lower():
+            return u
+
+    return urls[0]
 
 
 def extract_numeric_answer(payload: str):
@@ -28,11 +38,9 @@ def extract_numeric_answer(payload: str):
         return True
 
     if len(numbers) == 1:
-        if "." in numbers[0]:
-            return float(numbers[0])
-        return int(numbers[0])
+        return float(numbers[0]) if "." in numbers[0] else int(numbers[0])
 
-    total = 0
+    total = 0.0
     for n in numbers:
         total += float(n)
     return total
@@ -43,7 +51,7 @@ def solve_single_page(url: str):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(url, timeout=60000)
-        page.wait_for_timeout(4000)
+        page.wait_for_timeout(5000)
 
         html = page.content()
         browser.close()
@@ -67,7 +75,10 @@ def solve_quiz(email: str, secret: str, url: str):
         answer, submit_url = solve_single_page(current_url)
 
         if not submit_url:
-            return {"error": "submit_url_not_found"}
+            return {
+                "error": "submit_url_not_found",
+                "debug_payload_excerpt": payload[:300]
+            }
 
         payload = {
             "email": email,
