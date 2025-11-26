@@ -2,79 +2,69 @@ import time
 import base64
 import re
 import requests
+from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
 
 TIME_LIMIT = 170
 
 
-def extract_decoded_payload_from_html(html: str) -> str:
-    match = re.search(r"atob\((?:`|'|\")([^`'\"]+)(?:`|'|\")\)", html, re.DOTALL)
-    if not match:
-        return ""
-
-    b64 = match.group(1).replace("\n", "")
-    try:
-        decoded = base64.b64decode(b64).decode("utf-8", errors="ignore")
-    except Exception:
-        decoded = ""
-    return decoded
-
-
-def extract_visible_text_from_dom(url: str) -> str:
+def extract_text_and_urls_from_dom(url: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(url, timeout=60000)
         page.wait_for_timeout(4000)
-        text = page.inner_text("body")
-        browser.close()
-    return text
 
-
-def find_submit_url(text: str) -> str | None:
-    urls = re.findall(r"https?://[^\s\"']+", text)
-    if not urls:
-        return None
-
-    for u in urls:
-        if "submit" in u.lower():
-            return u
-
-    return urls[0]
-
-
-def extract_numeric_answer(text: str):
-    numbers = re.findall(r"-?\d+\.?\d*", text)
-    if not numbers:
-        return True
-
-    if len(numbers) == 1:
-        return float(numbers[0]) if "." in numbers[0] else int(numbers[0])
-
-    total = 0.0
-    for n in numbers:
-        total += float(n)
-    return total
-
-
-def solve_single_page(url: str):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(url, timeout=60000)
-        page.wait_for_timeout(4000)
         html = page.content()
+        text = page.inner_text("body")
+
         browser.close()
 
-    payload_text = extract_decoded_payload_from_html(html)
+    return html, text
 
-    if not payload_text.strip():
-        payload_text = extract_visible_text_from_dom(url)
 
-    submit_url = find_submit_url(payload_text)
-    answer = extract_numeric_answer(payload_text)
+def extract_relative_or_absolute_urls(text: str):
+    abs_urls = re.findall(r"https?://[^\s\"']+", text)
+    rel_urls = re.findall(r"/[a-zA-Z0-9\-\_/\\?=&]+", text)
+    return abs_urls + rel_urls
 
-    return answer, submit_url, payload_text
+
+def extract_demo_scrape_url(text: str):
+    match = re.search(r"/demo-scrape-data\?[^\s]+", text)
+    return match.group(0) if match else None
+
+
+def extract_submit_url(text: str):
+    match = re.search(r"/submit", text)
+    return match.group(0) if match else None
+
+
+def scrape_secret_from_demo(scrape_url: str):
+    r = requests.get(scrape_url, timeout=30)
+    r.raise_for_status()
+    text = r.text.strip()
+
+    code_match = re.search(r"[A-Za-z0-9]{4,}", text)
+    return code_match.group(0)
+
+
+def solve_single_page(url: str, email: str):
+    html, visible_text = extract_text_and_urls_from_dom(url)
+
+    scrape_url = extract_demo_scrape_url(visible_text)
+    submit_url = extract_submit_url(visible_text)
+
+    if scrape_url:
+        scrape_url = urljoin(url, scrape_url)
+
+    if submit_url:
+        submit_url = urljoin(url, submit_url)
+
+    secret_code = None
+    if scrape_url:
+        secret_code = scrape_secret_from_demo(scrape_url)
+
+    return secret_code, submit_url, visible_text
 
 
 def solve_quiz(email: str, secret: str, url: str):
@@ -86,19 +76,25 @@ def solve_quiz(email: str, secret: str, url: str):
         if time.time() - start_time > TIME_LIMIT:
             return {"error": "time_limit_exceeded"}
 
-        answer, submit_url, payload_text = solve_single_page(current_url)
+        secret_code, submit_url, text = solve_single_page(current_url, email)
 
         if not submit_url:
             return {
                 "error": "submit_url_not_found",
-                "debug_payload_excerpt": payload_text[:300]
+                "debug_payload_excerpt": text[:400]
+            }
+
+        if not secret_code:
+            return {
+                "error": "scraped_secret_not_found",
+                "debug_payload_excerpt": text[:400]
             }
 
         submit_payload = {
             "email": email,
             "secret": secret,
             "url": current_url,
-            "answer": answer
+            "answer": secret_code
         }
 
         r = requests.post(submit_url, json=submit_payload, timeout=30)
