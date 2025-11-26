@@ -60,7 +60,7 @@ def solve_single_page(url: str):
     submit_url = find_submit_url_from_payload(payload_text)
     answer = extract_numeric_answer(payload_text)
 
-    return answer, submit_url
+    return answer, submit_url, payload_text
 
 
 def solve_quiz(email: str, secret: str, url: str):
@@ -72,22 +72,22 @@ def solve_quiz(email: str, secret: str, url: str):
         if time.time() - start_time > TIME_LIMIT:
             return {"error": "time_limit_exceeded"}
 
-        answer, submit_url = solve_single_page(current_url)
+        answer, submit_url, payload_text = solve_single_page(current_url)
 
         if not submit_url:
             return {
                 "error": "submit_url_not_found",
-                "debug_payload_excerpt": payload[:300]
+                "debug_payload_excerpt": payload_text[:300]
             }
 
-        payload = {
+        submit_payload = {
             "email": email,
             "secret": secret,
             "url": current_url,
             "answer": answer
         }
 
-        r = requests.post(submit_url, json=payload, timeout=30)
+        r = requests.post(submit_url, json=submit_payload, timeout=30)
         r.raise_for_status()
         response = r.json()
 
