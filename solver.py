@@ -7,8 +7,8 @@ from playwright.sync_api import sync_playwright
 TIME_LIMIT = 170
 
 
-def extract_decoded_payload(html: str) -> str:
-    match = re.search(r"atob\(`([^`]+)`\)", html, re.DOTALL)
+def extract_decoded_payload_from_html(html: str) -> str:
+    match = re.search(r"atob\((?:`|'|\")([^`'\"]+)(?:`|'|\")\)", html, re.DOTALL)
     if not match:
         return ""
 
@@ -20,20 +20,31 @@ def extract_decoded_payload(html: str) -> str:
     return decoded
 
 
-def find_submit_url_from_payload(payload: str) -> str | None:
-    urls = re.findall(r"https?://[^\s\"']+", payload)
+def extract_visible_text_from_dom(url: str) -> str:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(url, timeout=60000)
+        page.wait_for_timeout(4000)
+        text = page.inner_text("body")
+        browser.close()
+    return text
+
+
+def find_submit_url(text: str) -> str | None:
+    urls = re.findall(r"https?://[^\s\"']+", text)
     if not urls:
         return None
 
     for u in urls:
-        if "submit" in u.lower() or "/api" in u.lower():
+        if "submit" in u.lower():
             return u
 
     return urls[0]
 
 
-def extract_numeric_answer(payload: str):
-    numbers = re.findall(r"-?\d+\.?\d*", payload)
+def extract_numeric_answer(text: str):
+    numbers = re.findall(r"-?\d+\.?\d*", text)
     if not numbers:
         return True
 
@@ -51,13 +62,16 @@ def solve_single_page(url: str):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(url, timeout=60000)
-        page.wait_for_timeout(5000)
-
+        page.wait_for_timeout(4000)
         html = page.content()
         browser.close()
 
-    payload_text = extract_decoded_payload(html)
-    submit_url = find_submit_url_from_payload(payload_text)
+    payload_text = extract_decoded_payload_from_html(html)
+
+    if not payload_text.strip():
+        payload_text = extract_visible_text_from_dom(url)
+
+    submit_url = find_submit_url(payload_text)
     answer = extract_numeric_answer(payload_text)
 
     return answer, submit_url, payload_text
