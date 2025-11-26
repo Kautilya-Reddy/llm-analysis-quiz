@@ -31,6 +31,21 @@ def extract_submit_url(text: str, base_url: str):
     return None
 
 
+def extract_sum_from_text(text: str):
+    numbers = re.findall(r"-?\d+\.?\d*", text)
+    if not numbers:
+        return 0
+
+    total = 0.0
+    for n in numbers:
+        total += float(n)
+
+    if total.is_integer():
+        return int(total)
+
+    return total
+
+
 def solve_quiz(email: str, secret: str, url: str):
     start_time = time.time()
     current_url = url
@@ -49,17 +64,19 @@ def solve_quiz(email: str, secret: str, url: str):
                 "debug_payload_excerpt": text[:400]
             }
 
-        # ✅ DEMO NOW ACCEPTS ANY ANSWER
+        answer_value = extract_sum_from_text(text)
+
         submit_payload = {
             "email": email,
             "secret": secret,
             "url": current_url,
-            "answer": "ok"
+            "answer": answer_value
         }
 
         r = requests.post(submit_url, json=submit_payload, timeout=30)
         r.raise_for_status()
         response = r.json()
+
         last_result = response
 
         if not response.get("correct", False):
