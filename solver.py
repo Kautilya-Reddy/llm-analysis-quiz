@@ -1,53 +1,59 @@
 import time
+import base64
+import re
 import requests
 from playwright.sync_api import sync_playwright
-from bs4 import BeautifulSoup
 
-TIME_LIMIT = 170  # seconds
+TIME_LIMIT = 170
 
-def extract_visible_text(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
-    for s in soup(["script", "style"]):
-        s.decompose()
-    return soup.get_text(separator=" ", strip=True)
 
-def find_submit_url(html: str) -> str | None:
-    soup = BeautifulSoup(html, "html.parser")
-    for form in soup.find_all("form"):
-        if form.get("action"):
-            return form["action"]
-    for a in soup.find_all("a"):
-        href = a.get("href")
-        if href and "submit" in href.lower():
-            return href
-    return None
+def extract_decoded_payload(html: str) -> str:
+    match = re.search(r"atob\(`([^`]+)`\)", html)
+    if not match:
+        return ""
 
-def solve_single_page(url: str) -> tuple[str | int | float | bool, str | None]:
+    b64 = match.group(1).replace("\n", "")
+    decoded = base64.b64decode(b64).decode("utf-8", errors="ignore")
+    return decoded
+
+
+def find_submit_url_from_payload(payload: str) -> str | None:
+    match = re.search(r"https://[^\s\"']+/submit", payload)
+    return match.group(0) if match else None
+
+
+def extract_numeric_answer(payload: str):
+    numbers = re.findall(r"-?\d+\.?\d*", payload)
+    if not numbers:
+        return True
+
+    if len(numbers) == 1:
+        if "." in numbers[0]:
+            return float(numbers[0])
+        return int(numbers[0])
+
+    total = 0
+    for n in numbers:
+        total += float(n)
+    return total
+
+
+def solve_single_page(url: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(url, timeout=60000)
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(4000)
 
         html = page.content()
-        text = extract_visible_text(html)
-        submit_url = find_submit_url(html)
-
         browser.close()
 
-    # ✅ Minimal generic "analysis fallback"
-    # (Real tasks usually need custom logic later)
-    answer = None
-
-    for token in text.split():
-        if token.replace(".", "", 1).isdigit():
-            answer = float(token) if "." in token else int(token)
-            break
-
-    if answer is None:
-        answer = True
+    payload_text = extract_decoded_payload(html)
+    submit_url = find_submit_url_from_payload(payload_text)
+    answer = extract_numeric_answer(payload_text)
 
     return answer, submit_url
+
 
 def solve_quiz(email: str, secret: str, url: str):
     start_time = time.time()
