@@ -1,5 +1,4 @@
 import time
-import json
 import requests
 from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
@@ -7,16 +6,17 @@ from playwright.sync_api import sync_playwright
 TIME_LIMIT = 170
 
 
-def fetch_numbers_via_network(url: str):
-    captured_payload = {}
+def fetch_network_json(url: str):
+    captured = {}
 
     def handle_response(response):
-        nonlocal captured_payload
+        nonlocal captured
         try:
-            if "json" in response.headers.get("content-type", ""):
+            ct = response.headers.get("content-type", "")
+            if "application/json" in ct:
                 data = response.json()
-                if isinstance(data, dict) and "numbers" in data:
-                    captured_payload = data
+                if isinstance(data, dict):
+                    captured = data
         except:
             pass
 
@@ -27,12 +27,12 @@ def fetch_numbers_via_network(url: str):
 
         page.goto(url, timeout=60000)
         page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(6000)
 
         visible_text = page.evaluate("() => document.body.innerText")
         browser.close()
 
-    return captured_payload, visible_text
+    return captured, visible_text
 
 
 def extract_submit_url(text: str, base_url: str):
@@ -48,56 +48,12 @@ def extract_submit_url(text: str, base_url: str):
     return None
 
 
-def compute_sum_from_payload(payload: dict):
-    if "numbers" in payload and isinstance(payload["numbers"], list):
-        return sum(payload["numbers"])
-    return 0
-
-
 def solve_quiz(email: str, secret: str, url: str):
-    start_time = time.time()
-    current_url = url
-    last_result = None
+    payload, text = fetch_network_json(url)
+    submit_url = extract_submit_url(text, url)
 
-    while current_url:
-        if time.time() - start_time > TIME_LIMIT:
-            return {"error": "time_limit_exceeded"}
-
-        payload, text = fetch_numbers_via_network(current_url)
-        submit_url = extract_submit_url(text, current_url)
-
-        if not submit_url:
-            return {
-                "error": "submit_url_not_found",
-                "debug_payload_excerpt": text[:400]
-            }
-
-        answer_value = compute_sum_from_payload(payload)
-
-        submit_payload = {
-            "email": email,
-            "secret": secret,
-            "url": current_url,
-            "answer": answer_value
-        }
-
-        r = requests.post(submit_url, json=submit_payload, timeout=30)
-        r.raise_for_status()
-        response = r.json()
-
-        last_result = response
-
-        if not response.get("correct", False):
-            if "url" in response:
-                current_url = response["url"]
-                continue
-            else:
-                break
-        else:
-            if "url" in response:
-                current_url = response["url"]
-                continue
-            else:
-                break
-
-    return last_result
+    return {
+        "debug_network_payload": payload,
+        "submit_url": submit_url,
+        "visible_text_excerpt": text[:300]
+    }
