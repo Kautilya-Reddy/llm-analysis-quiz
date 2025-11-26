@@ -1,3 +1,6 @@
 fastapi
 uvicorn
-
+playwright
+requests
+beautifulsoup4
+pandas

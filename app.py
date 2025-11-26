@@ -1,24 +1,25 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from solver import solve_quiz
 
 app = FastAPI()
 
 SECRET = "24f2005934"
 
-class Task(BaseModel):
-    question: str
-    options: list[str]
+class QuizTask(BaseModel):
+    email: str
     secret: str
+    url: str
 
 @app.post("/task")
-def solve_task(data: Task):
-    if data.secret != SECRET:
+def run_task(task: QuizTask):
+    if task.secret != SECRET:
         raise HTTPException(status_code=403, detail="Invalid secret")
 
-    q = data.question.lower()
+    result = solve_quiz(
+        email=task.email,
+        secret=task.secret,
+        url=task.url
+    )
 
-    for opt in data.options:
-        if opt.lower() in q:
-            return {"answer": opt}
-
-    return {"answer": data.options[0]}
+    return result
