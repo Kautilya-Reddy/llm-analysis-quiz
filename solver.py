@@ -1,5 +1,5 @@
 import time
-import re
+import json
 import requests
 from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
@@ -7,28 +7,36 @@ from playwright.sync_api import sync_playwright
 TIME_LIMIT = 170
 
 
-def extract_text_from_dom(url: str):
+def fetch_numbers_via_network(url: str):
+    captured_payload = {}
+
+    def handle_response(response):
+        nonlocal captured_payload
+        try:
+            if "json" in response.headers.get("content-type", ""):
+                data = response.json()
+                if isinstance(data, dict) and "numbers" in data:
+                    captured_payload = data
+        except:
+            pass
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        page.on("response", handle_response)
 
         page.goto(url, timeout=60000)
-
-        # ✅ Wait until network is mostly idle
         page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(5000)
 
-        # ✅ Extra wait for late JS injections
-        page.wait_for_timeout(8000)
-
-        # ✅ Get FULL rendered text via JS
-        text = page.evaluate("() => document.body.innerText")
-
+        visible_text = page.evaluate("() => document.body.innerText")
         browser.close()
 
-    return text
+    return captured_payload, visible_text
 
 
 def extract_submit_url(text: str, base_url: str):
+    import re
     abs_urls = re.findall(r"https?://[^\s\"']+", text)
     for u in abs_urls:
         if "submit" in u.lower():
@@ -40,26 +48,10 @@ def extract_submit_url(text: str, base_url: str):
     return None
 
 
-def extract_sum_from_text(text: str):
-    numbers = re.findall(r"-?\d+\.?\d*", text)
-
-    # ✅ Ignore trivial small numbers from text like delays, versions, etc.
-    filtered = []
-    for n in numbers:
-        val = float(n)
-        if abs(val) > 10:   # heuristic: real dataset numbers are larger
-            filtered.append(val)
-
-    if not filtered:
-        # fallback: sum everything
-        filtered = [float(n) for n in numbers] if numbers else [0]
-
-    total = sum(filtered)
-
-    if float(total).is_integer():
-        return int(total)
-
-    return total
+def compute_sum_from_payload(payload: dict):
+    if "numbers" in payload and isinstance(payload["numbers"], list):
+        return sum(payload["numbers"])
+    return 0
 
 
 def solve_quiz(email: str, secret: str, url: str):
@@ -71,7 +63,7 @@ def solve_quiz(email: str, secret: str, url: str):
         if time.time() - start_time > TIME_LIMIT:
             return {"error": "time_limit_exceeded"}
 
-        text = extract_text_from_dom(current_url)
+        payload, text = fetch_numbers_via_network(current_url)
         submit_url = extract_submit_url(text, current_url)
 
         if not submit_url:
@@ -80,7 +72,7 @@ def solve_quiz(email: str, secret: str, url: str):
                 "debug_payload_excerpt": text[:400]
             }
 
-        answer_value = extract_sum_from_text(text)
+        answer_value = compute_sum_from_payload(payload)
 
         submit_payload = {
             "email": email,
