@@ -2,7 +2,8 @@ import time
 import re
 import requests
 import pandas as pd
-from urllib.parse import urljoin
+import html
+from urllib.parse import urljoin, urlparse
 from playwright.sync_api import sync_playwright
 
 TIME_LIMIT = 170
@@ -15,28 +16,40 @@ def get_rendered_html(url: str):
         page.goto(url, timeout=60000)
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(3000)
-        html = page.content()
+        html_content = page.content()
         browser.close()
-    return html
+    return html_content
 
 
-def extract_submit_url_from_html(html: str, base_url: str):
-    urls = re.findall(r"https?://[^\s\"']+", html)
-    for u in urls:
+def clean_url(u: str):
+    u = html.unescape(u)
+    u = u.strip()
+    u = u.replace("<", "").replace(">", "")
+    return u
+
+
+def extract_submit_url_from_html(html_str: str, base_url: str):
+    # Extract raw URL-like strings
+    raw_urls = re.findall(r"https?://[^\s\"'>]+", html_str)
+
+    for u in raw_urls:
+        u = clean_url(u)
         if "submit" in u.lower():
             return u
 
-    m = re.search(r"(\/[^\s\"']*submit[^\s\"']*)", html, re.I)
+    # Fallback to relative submit paths
+    m = re.search(r"(/[^\"'>\s]*submit[^\"'>\s]*)", html_str, re.I)
     if m:
-        return urljoin(base_url, m.group(1))
+        return urljoin(base_url, clean_url(m.group(1)))
 
-    # Absolute fallback (demo usually uses /submit)
-    return urljoin(base_url, "/submit")
+    # Final hard fallback (demo always supports this)
+    parsed = urlparse(base_url)
+    return f"{parsed.scheme}://{parsed.netloc}/submit"
 
 
-def compute_sum_from_html_table(html: str):
+def compute_sum_from_html_table(html_str: str):
     try:
-        tables = pd.read_html(html)
+        tables = pd.read_html(html_str)
     except Exception:
         return 0.0
 
@@ -44,16 +57,13 @@ def compute_sum_from_html_table(html: str):
         return 0.0
 
     df = tables[0]
-
-    # Convert everything to numeric where possible
     df = df.apply(pd.to_numeric, errors="coerce")
 
     numeric_cols = df.select_dtypes(include="number").columns
-
     if not len(numeric_cols):
         return 0.0
 
-    # Choose the column with the maximum variance (safest for demo)
+    # safest heuristic: use the column with maximum variance
     best_col = max(numeric_cols, key=lambda c: df[c].var(skipna=True))
 
     return float(df[best_col].sum(skipna=True))
@@ -61,13 +71,15 @@ def compute_sum_from_html_table(html: str):
 
 def solve_single_page(url: str):
     try:
-        html = get_rendered_html(url)
-        submit_url = extract_submit_url_from_html(html, url)
-        answer = compute_sum_from_html_table(html)
+        html_content = get_rendered_html(url)
+        submit_url = extract_submit_url_from_html(html_content, url)
+        answer = compute_sum_from_html_table(html_content)
         return submit_url, answer
     except Exception:
-        # Absolute safety net — NEVER crash
-        return urljoin(url, "/submit"), 0.0
+        # Absolute safety net
+        parsed = urlparse(url)
+        fallback_submit = f"{parsed.scheme}://{parsed.netloc}/submit"
+        return fallback_submit, 0.0
 
 
 def solve_quiz(email: str, secret: str, url: str):
