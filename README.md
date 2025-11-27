@@ -10,19 +10,28 @@ pinned: false
 
 # LLM Analysis Quiz Solver
 
-This repository contains the LLM Analysis Quiz solver service.
+This service implements a robust solver for the **TDS LLM Analysis Quiz**.
 
-The app exposes a `/task` endpoint which accepts:
-- `email`
-- `secret`
-- `url`
+## Features
+- Accepts quiz tasks via a FastAPI `/task` endpoint
+- Secure secret validation
+- JavaScript-rendered page handling using **Playwright**
+- Automatic extraction of submit URLs from visible page text
+- Deterministic numeric computation using **pandas**
+- Robust handling of:
+  - Invalid JSON responses
+  - Missing tables
+  - Network & DNS failures
+  - 404 submit endpoints
+- Fully compatible with HuggingFace Spaces (Docker)
 
-The solver automatically handles:
-- page extraction
-- decoding
-- scraping
-- CSV processing
-- audio processing
-- multi-step quiz workflows
+## API Contract
 
-This version is prepared for deployment on **HuggingFace Spaces (Docker)**.
+POST `/task`
+
+```json
+{
+  "email": "your email",
+  "secret": "your secret",
+  "url": "quiz url"
+}

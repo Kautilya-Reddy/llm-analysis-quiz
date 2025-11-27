@@ -2,7 +2,6 @@ fastapi
 uvicorn
 playwright
 requests
-beautifulsoup4
 pandas
-openai
-openpyxl
+beautifulsoup4
+lxml

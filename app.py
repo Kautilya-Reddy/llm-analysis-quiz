@@ -11,6 +11,7 @@ class QuizTask(BaseModel):
     secret: str
     url: str
 
+
 @app.post("/task")
 def run_task(task: QuizTask):
     if task.secret != SECRET:

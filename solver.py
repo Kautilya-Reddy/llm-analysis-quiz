@@ -9,16 +9,20 @@ from playwright.sync_api import sync_playwright
 TIME_LIMIT = 170
 
 
-def get_rendered_html(url: str):
+def get_rendered_page(url: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(url, timeout=60000)
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(3000)
-        content = page.content()
+
+        html_content = page.content()
+        visible_text = page.evaluate("() => document.body.innerText")
+
         browser.close()
-    return content
+
+    return html_content, visible_text
 
 
 def clean_url(u: str):
@@ -27,18 +31,21 @@ def clean_url(u: str):
     return u
 
 
-def extract_submit_url_from_html(html_str: str, base_url: str):
-    raw_urls = re.findall(r"https?://[^\s\"'>]+", html_str)
+def extract_submit_url(visible_text: str, html_str: str, base_url: str):
+    # 1. Most reliable: look in visible text
+    text_urls = re.findall(r"https?://[^\s\"']+", visible_text)
+    for u in text_urls:
+        if "submit" in u.lower():
+            return clean_url(u)
 
-    for u in raw_urls:
+    # 2. Fallback: look in raw HTML
+    html_urls = re.findall(r"https?://[^\s\"'>]+", html_str)
+    for u in html_urls:
         u = clean_url(u)
         if "submit" in u.lower():
             return u
 
-    m = re.search(r"(/[^\"'>\s]*submit[^\"'>\s]*)", html_str, re.I)
-    if m:
-        return urljoin(base_url, clean_url(m.group(1)))
-
+    # 3. Final fallback
     parsed = urlparse(base_url)
     return f"{parsed.scheme}://{parsed.netloc}/submit"
 
@@ -75,8 +82,8 @@ def safe_json_response(resp):
 
 def solve_single_page(url: str):
     try:
-        html_content = get_rendered_html(url)
-        submit_url = extract_submit_url_from_html(html_content, url)
+        html_content, visible_text = get_rendered_page(url)
+        submit_url = extract_submit_url(visible_text, html_content, url)
         answer = compute_sum_from_html_table(html_content)
         return submit_url, answer
     except Exception:
