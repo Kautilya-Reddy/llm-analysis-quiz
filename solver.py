@@ -2,7 +2,7 @@ import time
 import re
 import requests
 import pandas as pd
-import html
+import html as html_lib
 from urllib.parse import urljoin, urlparse
 from playwright.sync_api import sync_playwright
 
@@ -16,20 +16,18 @@ def get_rendered_html(url: str):
         page.goto(url, timeout=60000)
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(3000)
-        html_content = page.content()
+        content = page.content()
         browser.close()
-    return html_content
+    return content
 
 
 def clean_url(u: str):
-    u = html.unescape(u)
-    u = u.strip()
-    u = u.replace("<", "").replace(">", "")
+    u = html_lib.unescape(u)
+    u = u.strip().replace("<", "").replace(">", "")
     return u
 
 
 def extract_submit_url_from_html(html_str: str, base_url: str):
-    # Extract raw URL-like strings
     raw_urls = re.findall(r"https?://[^\s\"'>]+", html_str)
 
     for u in raw_urls:
@@ -37,12 +35,10 @@ def extract_submit_url_from_html(html_str: str, base_url: str):
         if "submit" in u.lower():
             return u
 
-    # Fallback to relative submit paths
     m = re.search(r"(/[^\"'>\s]*submit[^\"'>\s]*)", html_str, re.I)
     if m:
         return urljoin(base_url, clean_url(m.group(1)))
 
-    # Final hard fallback (demo always supports this)
     parsed = urlparse(base_url)
     return f"{parsed.scheme}://{parsed.netloc}/submit"
 
@@ -63,10 +59,18 @@ def compute_sum_from_html_table(html_str: str):
     if not len(numeric_cols):
         return 0.0
 
-    # safest heuristic: use the column with maximum variance
     best_col = max(numeric_cols, key=lambda c: df[c].var(skipna=True))
-
     return float(df[best_col].sum(skipna=True))
+
+
+def safe_json_response(resp):
+    try:
+        return resp.json()
+    except Exception:
+        return {
+            "raw_text": resp.text[:500],
+            "status_code": resp.status_code
+        }
 
 
 def solve_single_page(url: str):
@@ -76,7 +80,6 @@ def solve_single_page(url: str):
         answer = compute_sum_from_html_table(html_content)
         return submit_url, answer
     except Exception:
-        # Absolute safety net
         parsed = urlparse(url)
         fallback_submit = f"{parsed.scheme}://{parsed.netloc}/submit"
         return fallback_submit, 0.0
@@ -100,11 +103,18 @@ def solve_quiz(email: str, secret: str, url: str):
             "answer": answer
         }
 
-        r = requests.post(submit_url, json=payload, timeout=30)
-        response = r.json()
+        try:
+            r = requests.post(submit_url, json=payload, timeout=30)
+            response = safe_json_response(r)
+        except Exception as e:
+            return {
+                "error": "submit_request_failed",
+                "detail": str(e)
+            }
+
         last_response = response
 
-        if "url" in response and response["url"]:
+        if isinstance(response, dict) and "url" in response and response["url"]:
             current_url = response["url"]
         else:
             break
