@@ -1,19 +1,17 @@
 import os
 import time
 import re
+import base64
 import requests
 import pandas as pd
-from io import BytesIO
+from io import BytesIO, StringIO
 from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
-import openai
 
 TIME_LIMIT = 170
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
 
-
-def get_rendered_text(url: str):
+def get_rendered_text_and_html(url: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
@@ -21,8 +19,9 @@ def get_rendered_text(url: str):
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(3000)
         text = page.evaluate("() => document.body.innerText")
+        html = page.content()
         browser.close()
-    return text
+    return text, html
 
 
 def extract_submit_url(text: str, base_url: str):
@@ -31,65 +30,45 @@ def extract_submit_url(text: str, base_url: str):
         if "submit" in u.lower():
             return u
 
-    if "/submit" in text.lower():
-        return urljoin(base_url, "/submit")
+    m = re.search(r"(\/[^\s\"']*submit[^\s\"']*)", text, re.I)
+    if m:
+        return urljoin(base_url, m.group(1))
 
     raise ValueError("Submit URL not found")
 
 
-def extract_file_urls(text: str):
-    return [
-        u for u in re.findall(r"https?://[^\s\"']+", text)
-        if any(ext in u.lower() for ext in [".csv", ".xlsx"])
-    ]
+def extract_base64_payload(html: str):
+    m = re.search(r"atob\(`([^`]*)`\)", html)
+    if not m:
+        raise ValueError("No base64 payload found")
+    return m.group(1)
 
 
-def detect_numeric_column_with_llm(df: pd.DataFrame):
-    prompt = f"""
-You are given column names:
-{list(df.columns)}
+def solve_base64_table(payload: str):
+    decoded = base64.b64decode(payload).decode("utf-8", errors="ignore")
 
-Which ONE column is most likely purely numeric for mathematical aggregation?
-Return only the exact column name.
-"""
+    lines = decoded.strip().splitlines()
+    rows = []
 
-    r = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0
-    )
+    for line in lines:
+        if "," in line:
+            parts = [p.strip() for p in line.split(",")]
+            rows.append(parts)
 
-    return r.choices[0].message["content"].strip()
+    df = pd.DataFrame(rows[1:], columns=rows[0])
+    df = df.apply(pd.to_numeric, errors="coerce")
 
-
-def solve_csv_or_excel(file_url: str):
-    r = requests.get(file_url, timeout=30)
-    content = r.content
-
-    if file_url.endswith(".csv"):
-        df = pd.read_csv(BytesIO(content))
-    else:
-        df = pd.read_excel(BytesIO(content))
-
-    df = df.select_dtypes(include="number")
-
-    if df.shape[1] == 1:
-        return float(df.iloc[:, 0].sum())
-
-    # multiple numeric columns → use LLM only to choose the column
-    chosen_col = detect_numeric_column_with_llm(df)
-    return float(df[chosen_col].sum())
+    numeric_col = df.select_dtypes(include="number").columns[0]
+    return float(df[numeric_col].sum())
 
 
 def solve_single_page(url: str):
-    text = get_rendered_text(url)
+    text, html = get_rendered_text_and_html(url)
     submit_url = extract_submit_url(text, url)
-    files = extract_file_urls(text)
 
-    if not files:
-        raise ValueError("No data file found for computation")
+    payload = extract_base64_payload(html)
+    answer = solve_base64_table(payload)
 
-    answer = solve_csv_or_excel(files[0])
     return submit_url, answer
 
 
