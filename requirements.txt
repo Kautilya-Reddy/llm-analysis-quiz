@@ -4,3 +4,5 @@ playwright
 requests
 beautifulsoup4
 pandas
+openai
+openpyxl
