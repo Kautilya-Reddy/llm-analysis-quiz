@@ -6,9 +6,6 @@ import html as html_lib
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 from llm_utils import llm_refine_answer
-import matplotlib.pyplot as plt
-import base64
-from io import BytesIO
 
 TIME_LIMIT = 170
 
@@ -69,27 +66,15 @@ def compute_sum_from_html_table(html_str: str):
     return float(df[best_col].sum(skipna=True))
 
 
-def generate_dummy_chart():
-    fig, ax = plt.subplots()
-    ax.plot([1, 2, 3], [1, 4, 9])
-    buf = BytesIO()
-    plt.savefig(buf, format="png")
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode()
-
-
 async def solve_single_page(url: str):
     html_content, visible_text = await get_rendered_page(url)
     submit_url = extract_submit_url(visible_text, html_content, url)
     raw_answer = compute_sum_from_html_table(html_content)
 
-    if raw_answer == 0:
-        final_answer = {"image_base64": generate_dummy_chart()}
-    else:
-        try:
-            final_answer = llm_refine_answer("Verify numeric table sum", raw_answer)
-        except Exception:
-            final_answer = raw_answer
+    try:
+        final_answer = llm_refine_answer("Verify numeric table sum", raw_answer)
+    except Exception:
+        final_answer = raw_answer
 
     return submit_url, final_answer
 
