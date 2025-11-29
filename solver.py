@@ -6,6 +6,7 @@ import html as html_lib
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 from llm_utils import llm_refine_answer
+from io import StringIO
 
 TIME_LIMIT = 170
 
@@ -66,6 +67,8 @@ def compute_sum_from_dataframe(df):
         col = "amount"
     else:
         numeric_cols = df.select_dtypes(include="number").columns
+        if not len(numeric_cols):
+            return 0.0
         col = numeric_cols[0]
 
     df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -77,7 +80,7 @@ def compute_sum_from_html_table(html_str: str):
         tables = pd.read_html(html_str)
         if tables:
             return compute_sum_from_dataframe(tables[0])
-    except:
+    except Exception:
         pass
     return None
 
@@ -86,25 +89,23 @@ async def solve_single_page(url: str):
     html_content, visible_text = await get_rendered_page(url)
     submit_url = extract_submit_url(visible_text, html_content, url)
 
-    # 1. Try direct HTML table
     raw_answer = compute_sum_from_html_table(html_content)
 
-    # 2. If no table, look for downloadable file
     if raw_answer is None:
         file_url = extract_data_file_url(html_content)
         if file_url:
-            file_data = await download_file(file_url)
             try:
-                df = pd.read_csv(pd.compat.StringIO(file_data))
+                file_data = await download_file(file_url)
+                df = pd.read_csv(StringIO(file_data))
                 raw_answer = compute_sum_from_dataframe(df)
-            except:
+            except Exception:
                 raw_answer = 0.0
         else:
             raw_answer = 0.0
 
     try:
         final_answer = llm_refine_answer("Verify numeric table sum", raw_answer)
-    except:
+    except Exception:
         final_answer = raw_answer
 
     return submit_url, final_answer
