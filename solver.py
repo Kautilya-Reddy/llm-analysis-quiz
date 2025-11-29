@@ -56,14 +56,20 @@ def compute_sum_from_html_table(html_str: str):
         return 0.0
 
     df = tables[0]
-    df = df.apply(pd.to_numeric, errors="coerce")
+    df.columns = [str(c).strip().lower() for c in df.columns]
 
-    numeric_cols = df.select_dtypes(include="number").columns
-    if not len(numeric_cols):
-        return 0.0
+    if "value" in df.columns:
+        col = "value"
+    elif "amount" in df.columns:
+        col = "amount"
+    else:
+        numeric_cols = df.select_dtypes(include="number").columns
+        if not len(numeric_cols):
+            return 0.0
+        col = numeric_cols[0]
 
-    best_col = max(numeric_cols, key=lambda c: df[c].var(skipna=True))
-    return float(df[best_col].sum(skipna=True))
+    df[col] = pd.to_numeric(df[col], errors="coerce")
+    return float(df[col].sum(skipna=True))
 
 
 async def solve_single_page(url: str):
