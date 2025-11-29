@@ -46,16 +46,18 @@ def extract_submit_url(visible_text: str, html_str: str, base_url: str):
     return f"{parsed.scheme}://{parsed.netloc}/submit"
 
 
-def compute_sum_from_html_table(html_str: str):
-    try:
-        tables = pd.read_html(html_str)
-    except Exception:
-        return 0.0
+def extract_data_file_url(html_str: str):
+    matches = re.findall(r'href="([^"]+\.(?:csv|tsv|txt|html))"', html_str, re.I)
+    return matches[0] if matches else None
 
-    if not tables:
-        return 0.0
 
-    df = tables[0]
+async def download_file(url):
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(url)
+        return r.text
+
+
+def compute_sum_from_dataframe(df):
     df.columns = [str(c).strip().lower() for c in df.columns]
 
     if "value" in df.columns:
@@ -64,22 +66,45 @@ def compute_sum_from_html_table(html_str: str):
         col = "amount"
     else:
         numeric_cols = df.select_dtypes(include="number").columns
-        if not len(numeric_cols):
-            return 0.0
         col = numeric_cols[0]
 
     df[col] = pd.to_numeric(df[col], errors="coerce")
     return float(df[col].sum(skipna=True))
 
 
+def compute_sum_from_html_table(html_str: str):
+    try:
+        tables = pd.read_html(html_str)
+        if tables:
+            return compute_sum_from_dataframe(tables[0])
+    except:
+        pass
+    return None
+
+
 async def solve_single_page(url: str):
     html_content, visible_text = await get_rendered_page(url)
     submit_url = extract_submit_url(visible_text, html_content, url)
+
+    # 1. Try direct HTML table
     raw_answer = compute_sum_from_html_table(html_content)
+
+    # 2. If no table, look for downloadable file
+    if raw_answer is None:
+        file_url = extract_data_file_url(html_content)
+        if file_url:
+            file_data = await download_file(file_url)
+            try:
+                df = pd.read_csv(pd.compat.StringIO(file_data))
+                raw_answer = compute_sum_from_dataframe(df)
+            except:
+                raw_answer = 0.0
+        else:
+            raw_answer = 0.0
 
     try:
         final_answer = llm_refine_answer("Verify numeric table sum", raw_answer)
-    except Exception:
+    except:
         final_answer = raw_answer
 
     return submit_url, final_answer
