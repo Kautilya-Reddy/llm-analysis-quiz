@@ -5,3 +5,6 @@ requests
 pandas
 beautifulsoup4
 lxml
+openai
+matplotlib
+httpx
