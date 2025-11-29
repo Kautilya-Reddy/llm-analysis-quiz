@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from solver import solve_quiz
 
 app = FastAPI()
@@ -14,7 +14,7 @@ class QuizTask(BaseModel):
 
 
 @app.post("/task")
-async def run_task(request: Request):
+async def run_task(request: Request, task: QuizTask):
     try:
         data = await request.json()
         task = QuizTask(**data)
