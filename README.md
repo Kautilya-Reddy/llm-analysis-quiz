@@ -1,37 +1,10 @@
----
-title: LLM Analysis Quiz Solver
-emoji: 🤖
-colorFrom: blue
-colorTo: purple
-sdk: docker
-app_file: app.py
-pinned: false
----
+This project implements a hybrid automated quiz-solving engine.
 
-# LLM Analysis Quiz Solver
+Architecture:
+1. Playwright is used for JavaScript-rendered page scraping.
+2. Pandas performs numerical data extraction and aggregation.
+3. A lightweight LLM verification layer is used to validate computed answers.
+4. Matplotlib is used to generate base64-encoded visualizations when required.
+5. Dynamic URL chaining allows multi-step quiz solving.
 
-This service implements a robust solver for the **TDS LLM Analysis Quiz**.
-
-## Features
-- Accepts quiz tasks via a FastAPI `/task` endpoint
-- Secure secret validation
-- JavaScript-rendered page handling using **Playwright**
-- Automatic extraction of submit URLs from visible page text
-- Deterministic numeric computation using **pandas**
-- Robust handling of:
-  - Invalid JSON responses
-  - Missing tables
-  - Network & DNS failures
-  - 404 submit endpoints
-- Fully compatible with HuggingFace Spaces (Docker)
-
-## API Contract
-
-POST `/task`
-
-```json
-{
-  "email": "your email",
-  "secret": "your secret",
-  "url": "quiz url"
-}
+Prompt-injection testing is evaluated externally using the submitted system and user prompts.

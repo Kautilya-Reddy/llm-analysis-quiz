@@ -3,206 +3,134 @@ import re
 import base64
 import httpx
 import pandas as pd
-import html as html_lib
 from io import StringIO
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urljoin
 from playwright.async_api import async_playwright
-from llm_utils import llm_refine_answer
 import pdfplumber
 import tempfile
 
 TIME_LIMIT = 170
 
 
-async def get_rendered_page(url: str):
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url, timeout=60000)
-        await page.wait_for_load_state("networkidle")
-        await page.wait_for_timeout(3000)
-
-        html_content = await page.content()
-        visible_text = await page.evaluate("() => document.body.innerText")
-
-        await browser.close()
-
-    return html_content, visible_text
+# ---------- Browser (single instance) ----------
+async def fetch_page(browser, url: str):
+    page = await browser.new_page()
+    await page.goto(url, timeout=60000)
+    await page.wait_for_load_state("networkidle")
+    html = await page.content()
+    text = await page.evaluate("() => document.body.innerText")
+    await page.close()
+    return html, text
 
 
-def decode_base64_script(html_str: str):
-    match = re.search(r"atob\(`([^`]*)`\)", html_str)
-    if not match:
+def decode_base64(html: str):
+    m = re.search(r"atob\(`([^`]*)`\)", html)
+    if not m:
         return None
-    encoded = match.group(1).replace("\n", "")
     try:
-        return base64.b64decode(encoded).decode()
+        return base64.b64decode(m.group(1).replace("\n", "")).decode()
     except Exception:
         return None
 
 
-def extract_submit_url(visible_text: str, html_str: str, base_url: str):
-    text_urls = re.findall(r"https?://[^\s\"']+", visible_text)
-    for u in text_urls:
+def extract_submit_url(html: str, text: str):
+    urls = re.findall(r"https?://[^\s\"']+", text)
+    for u in urls:
         if "submit" in u.lower():
-            return html_lib.unescape(u).strip()
+            return u
 
-    decoded = decode_base64_script(html_str)
+    decoded = decode_base64(html)
     if decoded:
         urls = re.findall(r"https?://[^\s\"']+", decoded)
         for u in urls:
             if "submit" in u.lower():
                 return u
 
-    parsed = urlparse(base_url)
-    return f"{parsed.scheme}://{parsed.netloc}/submit"
+    return None   # ❗ NO FALLBACK (spec-compliant)
 
 
-def extract_file_url(html_str: str, base_url: str):
-    decoded = decode_base64_script(html_str)
+def extract_file_url(html: str, base: str):
+    decoded = decode_base64(html)
     if decoded:
         urls = re.findall(r"https?://[^\s\"']+", decoded)
         for u in urls:
-            if any(u.lower().endswith(x) for x in [".pdf", ".csv"]):
+            if u.lower().endswith((".csv", ".pdf")):
                 return u
 
-    matches = re.findall(r'href="([^"]+)"', html_str)
+    matches = re.findall(r'href="([^"]+)"', html)
     for m in matches:
-        if m.lower().endswith((".pdf", ".csv")):
-            return urljoin(base_url, m)
+        if m.lower().endswith((".csv", ".pdf")):
+            return urljoin(base, m)
 
     return None
 
 
-async def download_file(url):
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(url)
-        return r.content
-
-
 def compute_from_df(df: pd.DataFrame):
-    df.columns = [str(c).strip().lower() for c in df.columns]
-
-    if "value" in df.columns:
-        col = "value"
-    elif "amount" in df.columns:
-        col = "amount"
-    else:
-        numeric = df.select_dtypes(include="number").columns
-        if not len(numeric):
-            return 0.0
-        col = numeric[0]
-
-    df[col] = pd.to_numeric(df[col], errors="coerce")
-    return float(df[col].sum(skipna=True))
+    df.columns = [c.strip().lower() for c in df.columns]
+    num = df.select_dtypes(include="number")
+    if num.empty:
+        return 0.0
+    return float(num.iloc[:, 0].sum(skipna=True))
 
 
-def compute_from_pdf(binary_data: bytes):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(binary_data)
-        tmp_path = tmp.name
+def compute_from_pdf(binary: bytes):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as f:
+        f.write(binary)
+        path = f.name
 
-    with pdfplumber.open(tmp_path) as pdf:
+    with pdfplumber.open(path) as pdf:
         if len(pdf.pages) < 2:
             return 0.0
-
         table = pdf.pages[1].extract_table()
-        if not table or len(table) < 2:
+        if not table:
             return 0.0
-
         df = pd.DataFrame(table[1:], columns=table[0])
         return compute_from_df(df)
 
 
-def extract_authoritative_answer_from_base64(html_str: str):
-    decoded = decode_base64_script(html_str)
-    if not decoded:
-        return None
-
-    numbers = re.findall(r"\d+", decoded)
-    if not numbers:
-        return None
-
-    return float(numbers[-1])  # last number is the official answer
-
-
-async def solve_single_page(url: str):
-    html_content, visible_text = await get_rendered_page(url)
-    submit_url = extract_submit_url(visible_text, html_content, url)
-    file_url = extract_file_url(html_content, url)
-
-    raw_answer = None
-
-    # ✅ PRIMARY PATH → FILE-BASED SOLUTION (CSV/PDF)
-    if file_url:
-        try:
-            file_bytes = await download_file(file_url)
-
-            if file_url.lower().endswith(".csv"):
-                df = pd.read_csv(StringIO(file_bytes.decode()))
-                raw_answer = compute_from_df(df)
-
-            elif file_url.lower().endswith(".pdf"):
-                raw_answer = compute_from_pdf(file_bytes)
-        except Exception:
-            raw_answer = None
-
-    # ✅ FALLBACK PATH → HTML TABLE
-    if raw_answer is None:
-        try:
-            tables = pd.read_html(html_content)
-            if tables:
-                raw_answer = compute_from_df(tables[0])
-        except Exception:
-            raw_answer = None
-
-    # ✅ FINAL SAFETY NET → BASE64 AUTHORITATIVE VALUE
-    if raw_answer is None or raw_answer == 0.0:
-        authoritative = extract_authoritative_answer_from_base64(html_content)
-        if authoritative is not None:
-            raw_answer = authoritative
-        else:
-            raw_answer = 0.0
-
-    # ✅ LLM VERIFICATION (KEPT)
-    try:
-        final_answer = llm_refine_answer("Verify numeric table sum", raw_answer)
-    except Exception:
-        final_answer = raw_answer
-
-    return submit_url, final_answer
-
-
 async def solve_quiz(email: str, secret: str, url: str):
     start = time.time()
-    current_url = url
-    last_response = None
+    current = url
+    last = None
 
-    while current_url:
-        if time.time() - start > TIME_LIMIT:
-            return {"error": "time_limit_exceeded"}
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
 
-        submit_url, answer = await solve_single_page(current_url)
+        while current:
+            if time.time() - start > TIME_LIMIT:
+                return {"error": "time_limit_exceeded"}
 
-        payload = {
-            "email": email,
-            "secret": secret,
-            "url": current_url,
-            "answer": answer
-        }
+            html, text = await fetch_page(browser, current)
+            submit_url = extract_submit_url(html, text)
 
-        try:
+            if not submit_url:
+                return {"error": "submit_url_not_found"}
+
+            answer = 0.0
+            file_url = extract_file_url(html, current)
+
+            if file_url:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    data = await client.get(file_url)
+                if file_url.endswith(".csv"):
+                    df = pd.read_csv(StringIO(data.text))
+                    answer = compute_from_df(df)
+                elif file_url.endswith(".pdf"):
+                    answer = compute_from_pdf(data.content)
+
+            payload = {
+                "email": email,
+                "secret": secret,
+                "url": current,
+                "answer": answer
+            }
+
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(submit_url, json=payload)
-                response = r.json()
-        except Exception as e:
-            return {"error": "submit_request_failed", "detail": str(e)}
+                resp = r.json()
 
-        last_response = response
+            last = resp
+            current = resp.get("url")
 
-        if isinstance(response, dict) and response.get("url"):
-            current_url = response["url"]
-        else:
-            break
-
-    return last_response
+        await browser.close()
+    return last
