@@ -8,11 +8,31 @@ from urllib.parse import urljoin
 from playwright.async_api import async_playwright
 import pdfplumber
 import tempfile
+import mimetypes
+
 
 TIME_LIMIT = 170
 
 
-# ---------- Browser (single instance) ----------
+# ---------- Helpers ----------
+
+def encode_file_base64(binary: bytes, filename: str):
+    mime, _ = mimetypes.guess_type(filename)
+    mime = mime or "application/octet-stream"
+    b64 = base64.b64encode(binary).decode()
+    return f"data:{mime};base64,{b64}"
+
+
+def normalize_answer(answer):
+    if isinstance(answer, (int, float, str, bool)):
+        return answer
+    if isinstance(answer, dict):
+        return answer
+    return str(answer)
+
+
+# ---------- Browser ----------
+
 async def fetch_page(browser, url: str):
     page = await browser.new_page()
     await page.goto(url, timeout=60000)
@@ -46,7 +66,7 @@ def extract_submit_url(html: str, text: str):
             if "submit" in u.lower():
                 return u
 
-    return None   # ❗ NO FALLBACK (spec-compliant)
+    return None
 
 
 def extract_file_url(html: str, base: str):
@@ -54,12 +74,12 @@ def extract_file_url(html: str, base: str):
     if decoded:
         urls = re.findall(r"https?://[^\s\"']+", decoded)
         for u in urls:
-            if u.lower().endswith((".csv", ".pdf")):
+            if u.lower().endswith((".csv", ".pdf", ".png", ".jpg", ".jpeg")):
                 return u
 
     matches = re.findall(r'href="([^"]+)"', html)
     for m in matches:
-        if m.lower().endswith((".csv", ".pdf")):
+        if m.lower().endswith((".csv", ".pdf", ".png", ".jpg", ".jpeg")):
             return urljoin(base, m)
 
     return None
@@ -88,6 +108,8 @@ def compute_from_pdf(binary: bytes):
         return compute_from_df(df)
 
 
+# ---------- Main Solver ----------
+
 async def solve_quiz(email: str, secret: str, url: str):
     start = time.time()
     current = url
@@ -107,22 +129,40 @@ async def solve_quiz(email: str, secret: str, url: str):
                 return {"error": "submit_url_not_found"}
 
             answer = 0.0
-            file_url = extract_file_url(html, current)
 
+            # --- String / Boolean detection ---
+            m = re.search(r"answer is\s+(true|false)", text, re.I)
+            if m:
+                answer = m.group(1).lower() == "true"
+            else:
+                m = re.search(r"answer is\s+([A-Za-z0-9_\- ]+)", text, re.I)
+                if m:
+                    answer = m.group(1).strip()
+
+            # --- File-based answers ---
+            file_url = extract_file_url(html, current)
             if file_url:
                 async with httpx.AsyncClient(timeout=30) as client:
                     data = await client.get(file_url)
-                if file_url.endswith(".csv"):
+
+                if file_url.lower().endswith(".csv"):
                     df = pd.read_csv(StringIO(data.text))
                     answer = compute_from_df(df)
-                elif file_url.endswith(".pdf"):
+
+                elif file_url.lower().endswith(".pdf"):
                     answer = compute_from_pdf(data.content)
+
+                elif file_url.lower().endswith((".png", ".jpg", ".jpeg")):
+                    answer = encode_file_base64(
+                        data.content,
+                        file_url.split("/")[-1]
+                    )
 
             payload = {
                 "email": email,
                 "secret": secret,
                 "url": current,
-                "answer": answer
+                "answer": normalize_answer(answer)
             }
 
             async with httpx.AsyncClient(timeout=30) as client:
@@ -133,4 +173,5 @@ async def solve_quiz(email: str, secret: str, url: str):
             current = resp.get("url")
 
         await browser.close()
+
     return last
