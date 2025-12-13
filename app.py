@@ -4,7 +4,8 @@ from solver import solve_quiz
 import json
 
 app = FastAPI()
-SECRET = "24f2005934"
+import os
+SECRET = os.environ.get("SECRET", "24f2005934")
 
 @app.post("/task")
 async def run_task(request: Request):
